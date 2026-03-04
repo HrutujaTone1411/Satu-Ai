@@ -1,13 +1,20 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import './App.css'
 
 function App() {
   const [status, setStatus] = useState("Checking...");
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState("");
-
-  // NEW: We add a loading state to lock the UI while waiting
   const [isLoading, setIsLoading] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+
+  // Auto-scroll to the bottom of the chat
+  const chatWindowRef = useRef(null);
+  useEffect(() => {
+    if (chatWindowRef.current) {
+      chatWindowRef.current.scrollTop = chatWindowRef.current.scrollHeight;
+    }
+  }, [messages, isLoading]);
 
   useEffect(() => {
     fetch("http://127.0.0.1:8000/status")
@@ -16,92 +23,100 @@ function App() {
       .catch(() => setStatus("Offline"));
   }, []);
 
+  const speakText = (text) => {
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1.0;
+    utterance.pitch = 1.0;
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const startListening = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      alert("Your browser does not support voice input. Please use Google Chrome.");
+      return;
+    }
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'en-IN';
+    recognition.interimResults = false;
+
+    recognition.onstart = () => setIsListening(true);
+    recognition.onresult = (event) => setInputText(event.results[0][0].transcript);
+    recognition.onerror = () => setIsListening(false);
+    recognition.onend = () => setIsListening(false);
+    recognition.start();
+  };
+
   const sendMessage = async () => {
-    // If the box is empty OR if Satu is already thinking, do nothing!
     if (!inputText.trim() || isLoading) return;
 
     const newMessages = [...messages, { sender: "You", text: inputText }];
     setMessages(newMessages);
     setInputText("");
-
-    // Lock the input box and button
     setIsLoading(true);
 
     try {
       const response = await fetch("http://127.0.0.1:8000/chat", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: inputText }),
       });
-
       const data = await response.json();
-
-      setMessages((prevMessages) => [
-        ...prevMessages,
-        { sender: "Satu Ai", text: data.reply },
-      ]);
+      setMessages((prev) => [...prev, { sender: "Satish", text: data.reply }]);
+      speakText(data.reply);
     } catch (error) {
-      setMessages((prevMessages) => [
-        ...prevMessages,
-        { sender: "System", text: "Error connecting to Satu's brain." },
-      ]);
+      setMessages((prev) => [...prev, { sender: "System", text: "Error connecting to Satish's core." }]);
     } finally {
-      // Unlock the input box and button after we get a reply (or an error)
       setIsLoading(false);
     }
   };
 
   return (
-    <div className="app-container" style={{ padding: "20px", fontFamily: "sans-serif" }}>
-      <h1>Satu Ai</h1>
-      <p style={{ color: status === "Online" ? "green" : "red" }}>
-        Status: {status}
-      </p>
+    <div className="app-container">
+      <div className="header">
+        <h1>SATISH AI</h1>
+        <div className={`status-indicator ${status === 'Online' ? 'online' : 'offline'}`}>
+          SYSTEM STATUS: {status.toUpperCase()}
+        </div>
+      </div>
 
-      <div
-        className="chat-window"
-        style={{
-          border: "1px solid #ccc",
-          height: "400px",
-          overflowY: "scroll",
-          padding: "10px",
-          marginBottom: "10px",
-          backgroundColor: "#f9f9f9",
-          color: "#333"
-        }}
-      >
+      <div className="chat-window" ref={chatWindowRef}>
         {messages.length === 0 ? (
-          <p style={{ color: "#888" }}>Say hello to start the conversation!</p>
+          <div className="system-text">Awaiting user input...</div>
         ) : (
           messages.map((msg, index) => (
-            <div key={index} style={{ marginBottom: "10px", textAlign: msg.sender === "You" ? "right" : "left" }}>
-              <strong>{msg.sender}: </strong>
+            <div key={index} className={`message-bubble ${msg.sender === 'You' ? 'message-you' : 'message-satish'}`}>
+              <strong>{msg.sender === 'You' ? 'USER' : 'SATISH'}: </strong>
               <span>{msg.text}</span>
             </div>
           ))
         )}
-        {/* NEW: Show a typing indicator */}
-        {isLoading && <p style={{ color: "#888", fontStyle: "italic" }}>Satu is typing...</p>}
+        {isLoading && <div className="system-text">Satish is processing...</div>}
       </div>
 
-      <div style={{ display: "flex", gap: "10px" }}>
+      <div className="input-area">
+        <button
+          className={`btn btn-mic ${isListening ? 'listening' : ''}`}
+          onClick={startListening}
+          disabled={isListening || isLoading}
+          title="Click to speak"
+        >
+          🎤
+        </button>
+
         <input
           type="text"
+          className="chat-input"
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
-          placeholder="Type a message (English, Marathi, or Hindi)..."
-          disabled={isLoading} // Disables typing while loading
-          style={{ flex: 1, padding: "10px", fontSize: "16px" }}
+          placeholder="Enter command or speak..."
+          disabled={isLoading}
         />
-        <button
-          onClick={sendMessage}
-          disabled={isLoading} // Disables clicking while loading
-          style={{ padding: "10px 20px", fontSize: "16px", cursor: isLoading ? "not-allowed" : "pointer" }}
-        >
-          {isLoading ? "Sending..." : "Send"}
+
+        <button className="btn" onClick={sendMessage} disabled={isLoading}>
+          {isLoading ? "TX..." : "SEND"}
         </button>
       </div>
     </div>

@@ -2,11 +2,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
+import subprocess  # NEW: Lets Python open Windows applications
+import webbrowser  # NEW: Lets Python open websites
 from dotenv import load_dotenv
 from groq import Groq
 
-# --- WAKING UP GROQ ---
-print("\n--- STARTING SATU AI (GROQ EDITION) ---")
+print("\n--- STARTING SATU AI (PC CONTROL EDITION) ---")
 load_dotenv() 
 api_key = os.getenv("GROQ_API_KEY")
 
@@ -16,17 +17,21 @@ else:
     print("✅ SUCCESS: Groq API Key found!")
 print("----------------------------------------\n")
 
-# Initialize Groq Client
 client = Groq(api_key=api_key)
 
-# Define Satu's Persona
-system_instruction = """
-You are Satu Ai, a highly advanced AI agent and a loyal best friend. 
+# NEW: We upgraded the system instructions to teach Satu how to use PC commands
+system_instruction =system_instruction = """
+You are Satish, a highly advanced AI agent and a loyal best friend. 
 You are talking to an IT student. You are conversational, empathetic, and slightly humorous. 
 You can speak fluently in English, Marathi, and Hindi. 
-If your friend is practicing English, be supportive and speak clearly.
-Always be ready to help with coding, daily tasks, or just having a good chat.
-Keep your responses concise and natural.
+
+PC CONTROL INSTRUCTIONS:
+If the user asks you to open YouTube, append the exact text <CMD: web_youtube> to your reply.
+If the user asks you to open Google, append the exact text <CMD: web_google> to your reply.
+If the user asks you to open Notepad, append the exact text <CMD: app_notepad> to your reply.
+If the user asks you to open Calculator, append the exact text <CMD: app_calc> to your reply.
+
+Example: If the user says "Open YouTube", you should reply: "Opening YouTube for you now! <CMD: web_youtube>"
 """
 
 app = FastAPI()
@@ -56,25 +61,35 @@ def chat_with_satu(request: ChatRequest):
         if not api_key:
             return {"reply": "System Error: Missing Groq API Key."}
             
-        # Sending the message to Groq (using Meta's ultra-fast Llama 3 model)
         chat_completion = client.chat.completions.create(
             messages=[
-                {
-                    "role": "system",
-                    "content": system_instruction
-                },
-                {
-                    "role": "user",
-                    "content": request.message
-                }
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": request.message}
             ],
-            model="llama-3.3-70b-versatile", # This is a massive, highly capable model
+            model="llama-3.3-70b-versatile",
             temperature=0.7,
         )
         
-        # Getting the reply
         reply = chat_completion.choices[0].message.content
-        return {"reply": reply}
+
+        # NEW: The Interceptor (Checking for hidden commands from the AI)
+        if "<CMD: web_youtube>" in reply:
+            webbrowser.open("https://www.youtube.com")
+            reply = reply.replace("<CMD: web_youtube>", "") # Hide the tag from the user
+            
+        elif "<CMD: web_google>" in reply:
+            webbrowser.open("https://www.google.com")
+            reply = reply.replace("<CMD: web_google>", "")
+            
+        elif "<CMD: app_notepad>" in reply:
+            subprocess.Popen(["notepad.exe"]) # Opens Windows Notepad
+            reply = reply.replace("<CMD: app_notepad>", "")
+            
+        elif "<CMD: app_calc>" in reply:
+            subprocess.Popen(["calc.exe"]) # Opens Windows Calculator
+            reply = reply.replace("<CMD: app_calc>", "")
+
+        return {"reply": reply.strip()}
         
     except Exception as e:
         return {"reply": f"System Error: {str(e)}"}
