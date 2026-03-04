@@ -2,12 +2,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
-import subprocess  # NEW: Lets Python open Windows applications
-import webbrowser  # NEW: Lets Python open websites
+import subprocess
+import webbrowser
 from dotenv import load_dotenv
 from groq import Groq
+from datetime import datetime # NEW: Gives Python access to the clock
 
-print("\n--- STARTING SATU AI (PC CONTROL EDITION) ---")
+print("\n--- STARTING SATISH AI (AWARENESS EDITION) ---")
 load_dotenv() 
 api_key = os.getenv("GROQ_API_KEY")
 
@@ -18,21 +19,6 @@ else:
 print("----------------------------------------\n")
 
 client = Groq(api_key=api_key)
-
-# NEW: We upgraded the system instructions to teach Satu how to use PC commands
-system_instruction =system_instruction = """
-You are Satish, a highly advanced AI agent and a loyal best friend. 
-You are talking to an IT student. You are conversational, empathetic, and slightly humorous. 
-You can speak fluently in English, Marathi, and Hindi. 
-
-PC CONTROL INSTRUCTIONS:
-If the user asks you to open YouTube, append the exact text <CMD: web_youtube> to your reply.
-If the user asks you to open Google, append the exact text <CMD: web_google> to your reply.
-If the user asks you to open Notepad, append the exact text <CMD: app_notepad> to your reply.
-If the user asks you to open Calculator, append the exact text <CMD: app_calc> to your reply.
-
-Example: If the user says "Open YouTube", you should reply: "Opening YouTube for you now! <CMD: web_youtube>"
-"""
 
 app = FastAPI()
 
@@ -46,10 +32,11 @@ app.add_middleware(
 
 class ChatRequest(BaseModel):
     message: str
+    history: list = []
 
 @app.get("/")
 def read_root():
-    return {"message": "Satu Ai Backend is awake!"}
+    return {"message": "Satish Backend is awake!"}
 
 @app.get("/status")
 def get_status():
@@ -61,33 +48,66 @@ def chat_with_satu(request: ChatRequest):
         if not api_key:
             return {"reply": "System Error: Missing Groq API Key."}
             
+        # NEW: Grab the exact time and date right when the user asks a question
+        current_time = datetime.now().strftime("%I:%M %p")
+        current_date = datetime.now().strftime("%A, %B %d, %Y")
+        
+        # NEW: The Dynamic System Prompt
+        # We inject the time, date, and location directly into his brain!
+        dynamic_instruction = f"""
+        You are Satish, a highly advanced AI agent and a loyal best friend. 
+        You are talking to an IT student. You are conversational, empathetic, and slightly humorous. 
+        You can speak fluently in English, Marathi, and Hindi. 
+        
+        REAL-TIME CONTEXT:
+        - Current Time: {current_time}
+        - Current Date: {current_date}
+        - Current Location: Navi Mumbai, Maharashtra, India
+        
+        PC CONTROL INSTRUCTIONS:
+        If the user asks you to open YouTube, append the exact text <CMD: web_youtube> to your reply.
+        If the user asks you to open Google, append the exact text <CMD: web_google> to your reply.
+        If the user asks you to open Notepad, append the exact text <CMD: app_notepad> to your reply.
+        If the user asks you to open Calculator, append the exact text <CMD: app_calc> to your reply.
+        If the user asks you to open the Satu result folder, append the exact text <CMD: open_satu_result> to your reply.
+        """
+            
+        groq_messages = [{"role": "system", "content": dynamic_instruction}]
+        
+        for past_msg in request.history:
+            if past_msg.get("role") in ["user", "assistant"]:
+                groq_messages.append(past_msg)
+                
+        groq_messages.append({"role": "user", "content": request.message})
+            
         chat_completion = client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": system_instruction},
-                {"role": "user", "content": request.message}
-            ],
+            messages=groq_messages, 
             model="llama-3.3-70b-versatile",
             temperature=0.7,
         )
         
         reply = chat_completion.choices[0].message.content
 
-        # NEW: The Interceptor (Checking for hidden commands from the AI)
+        # --- PC COMMAND INTERCEPTORS ---
         if "<CMD: web_youtube>" in reply:
             webbrowser.open("https://www.youtube.com")
-            reply = reply.replace("<CMD: web_youtube>", "") # Hide the tag from the user
+            reply = reply.replace("<CMD: web_youtube>", "")
             
         elif "<CMD: web_google>" in reply:
             webbrowser.open("https://www.google.com")
             reply = reply.replace("<CMD: web_google>", "")
             
         elif "<CMD: app_notepad>" in reply:
-            subprocess.Popen(["notepad.exe"]) # Opens Windows Notepad
+            subprocess.Popen(["notepad.exe"])
             reply = reply.replace("<CMD: app_notepad>", "")
             
         elif "<CMD: app_calc>" in reply:
-            subprocess.Popen(["calc.exe"]) # Opens Windows Calculator
+            subprocess.Popen(["calc.exe"])
             reply = reply.replace("<CMD: app_calc>", "")
+
+        elif "<CMD: open_satu_result>" in reply:
+            os.startfile(r"C:\Satu Ai\satu result") 
+            reply = reply.replace("<CMD: open_satu_result>", "")
 
         return {"reply": reply.strip()}
         

@@ -51,6 +51,14 @@ function App() {
   const sendMessage = async () => {
     if (!inputText.trim() || isLoading) return;
 
+    // NEW: Package the conversation history for the backend
+    const chatHistory = messages
+      .filter(msg => msg.sender === "You" || msg.sender === "Satish")
+      .map(msg => ({
+        role: msg.sender === "You" ? "user" : "assistant",
+        content: msg.text
+      }));
+
     const newMessages = [...messages, { sender: "You", text: inputText }];
     setMessages(newMessages);
     setInputText("");
@@ -60,7 +68,8 @@ function App() {
       const response = await fetch("http://127.0.0.1:8000/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: inputText }),
+        // NEW: We are now sending BOTH the new message and the history array
+        body: JSON.stringify({ message: inputText, history: chatHistory }),
       });
       const data = await response.json();
       setMessages((prev) => [...prev, { sender: "Satish", text: data.reply }]);
