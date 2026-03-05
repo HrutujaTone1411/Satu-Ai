@@ -6,10 +6,14 @@ function App() {
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [isListening, setIsListening] = useState(false);
 
-  // Auto-scroll to the bottom of the chat
+  // NEW: Real audio recording states
+  const [isRecording, setIsRecording] = useState(false);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+
   const chatWindowRef = useRef(null);
+
   useEffect(() => {
     if (chatWindowRef.current) {
       chatWindowRef.current.scrollTop = chatWindowRef.current.scrollHeight;
@@ -26,32 +30,80 @@ function App() {
   const speakText = (text) => {
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
+    const containsDevanagari = /[\u0900-\u097F]/.test(text);
+
+    if (containsDevanagari) {
+      utterance.lang = 'hi-IN';
+    } else {
+      utterance.lang = 'en-IN';
+    }
     utterance.rate = 1.0;
     utterance.pitch = 1.0;
     window.speechSynthesis.speak(utterance);
   };
 
-  const startListening = () => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      alert("Your browser does not support voice input. Please use Google Chrome.");
-      return;
-    }
-    const recognition = new SpeechRecognition();
-    recognition.lang = 'en-IN';
-    recognition.interimResults = false;
+  // --- NEW: THE AUDIO RECORDER LOGIC ---
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
 
-    recognition.onstart = () => setIsListening(true);
-    recognition.onresult = (event) => setInputText(event.results[0][0].transcript);
-    recognition.onerror = () => setIsListening(false);
-    recognition.onend = () => setIsListening(false);
-    recognition.start();
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        setIsLoading(true);
+        // 1. Package the audio into a file
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const formData = new FormData();
+        formData.append("file", audioBlob, "voice.webm");
+
+        try {
+          // 2. Send the audio file to Python to be transcribed
+          const response = await fetch("http://127.0.0.1:8000/transcribe", {
+            method: "POST",
+            body: formData,
+          });
+          const data = await response.json();
+
+          if (data.text) {
+            setInputText(data.text);
+            sendMessage(data.text); // 3. Auto-send the transcribed text!
+          } else {
+            console.error("Transcription failed:", data.error);
+          }
+        } catch (error) {
+          console.error("Error sending audio:", error);
+        } finally {
+          setIsLoading(false);
+          // Turn off the red recording light on the browser tab
+          stream.getTracks().forEach(track => track.stop());
+        }
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+    } catch (err) {
+      alert("Microphone access denied. Please allow microphone permissions in your browser.");
+    }
   };
 
-  const sendMessage = async () => {
-    if (!inputText.trim() || isLoading) return;
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop(); // This triggers the onstop event above
+      setIsRecording(false);
+    }
+  };
 
-    // NEW: Package the conversation history for the backend
+  const sendMessage = async (overrideText = null) => {
+    const finalMessage = typeof overrideText === 'string' ? overrideText : inputText;
+    if (!finalMessage.trim() || isLoading) return;
+
     const chatHistory = messages
       .filter(msg => msg.sender === "You" || msg.sender === "Satish")
       .map(msg => ({
@@ -59,7 +111,7 @@ function App() {
         content: msg.text
       }));
 
-    const newMessages = [...messages, { sender: "You", text: inputText }];
+    const newMessages = [...messages, { sender: "You", text: finalMessage }];
     setMessages(newMessages);
     setInputText("");
     setIsLoading(true);
@@ -68,8 +120,7 @@ function App() {
       const response = await fetch("http://127.0.0.1:8000/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // NEW: We are now sending BOTH the new message and the history array
-        body: JSON.stringify({ message: inputText, history: chatHistory }),
+        body: JSON.stringify({ message: finalMessage, history: chatHistory }),
       });
       const data = await response.json();
       setMessages((prev) => [...prev, { sender: "Satish", text: data.reply }]);
@@ -105,13 +156,14 @@ function App() {
       </div>
 
       <div className="input-area">
+        {/* The new smart recording button */}
         <button
-          className={`btn btn-mic ${isListening ? 'listening' : ''}`}
-          onClick={startListening}
-          disabled={isListening || isLoading}
-          title="Click to speak"
+          className={`btn btn-mic ${isRecording ? 'listening' : ''}`}
+          onClick={isRecording ? stopRecording : startRecording}
+          disabled={isLoading && !isRecording}
+          style={{ width: isRecording ? "180px" : "auto", transition: "0.3s" }}
         >
-          🎤
+          {isRecording ? "🛑 STOP & SEND" : "🎤"}
         </button>
 
         <input
@@ -120,11 +172,11 @@ function App() {
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
-          placeholder="Enter command or speak..."
-          disabled={isLoading}
+          placeholder="Enter command or click mic..."
+          disabled={isLoading || isRecording}
         />
 
-        <button className="btn" onClick={sendMessage} disabled={isLoading}>
+        <button className="btn" onClick={sendMessage} disabled={isLoading || isRecording}>
           {isLoading ? "TX..." : "SEND"}
         </button>
       </div>
