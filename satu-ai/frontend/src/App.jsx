@@ -6,13 +6,16 @@ function App() {
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-
-  // NEW: Real audio recording states
   const [isRecording, setIsRecording] = useState(false);
+
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
-
   const chatWindowRef = useRef(null);
+
+  const isRecordingRef = useRef(false);
+  const silenceTimerRef = useRef(null);
+  const audioContextRef = useRef(null);
+  const animationFrameRef = useRef(null);
 
   useEffect(() => {
     if (chatWindowRef.current) {
@@ -29,74 +32,102 @@ function App() {
 
   const speakText = (text) => {
     window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    const containsDevanagari = /[\u0900-\u097F]/.test(text);
+    // NEW: Strip out the image URL so the browser doesn't try to read it!
+    const spokenText = text.includes("IMAGE_URL:") ? text.split("IMAGE_URL:")[0] : text;
 
-    if (containsDevanagari) {
-      utterance.lang = 'hi-IN';
-    } else {
-      utterance.lang = 'en-IN';
-    }
+    const utterance = new SpeechSynthesisUtterance(spokenText);
+    const containsDevanagari = /[\u0900-\u097F]/.test(spokenText);
+
+    utterance.lang = containsDevanagari ? 'hi-IN' : 'en-IN';
     utterance.rate = 1.0;
     utterance.pitch = 1.0;
     window.speechSynthesis.speak(utterance);
   };
 
-  // --- NEW: THE AUDIO RECORDER LOGIC ---
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
+      isRecordingRef.current = true;
+      setIsRecording(true);
+
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      audioContextRef.current = audioContext;
+      const analyser = audioContext.createAnalyser();
+      const source = audioContext.createMediaStreamSource(stream);
+      source.connect(analyser);
+      analyser.fftSize = 512;
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+      const detectSilence = () => {
+        if (!isRecordingRef.current) return;
+        analyser.getByteFrequencyData(dataArray);
+        const volume = dataArray.reduce((a, b) => a + b) / dataArray.length;
+
+        if (volume > 12) {
+          if (silenceTimerRef.current) {
+            clearTimeout(silenceTimerRef.current);
+            silenceTimerRef.current = null;
+          }
+        } else {
+          if (!silenceTimerRef.current) {
+            silenceTimerRef.current = setTimeout(() => {
+              stopRecording();
+            }, 2000);
+          }
+        }
+        animationFrameRef.current = requestAnimationFrame(detectSilence);
+      };
+
+      detectSilence();
 
       mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
+        if (event.data.size > 0) audioChunksRef.current.push(event.data);
       };
 
       mediaRecorder.onstop = async () => {
         setIsLoading(true);
-        // 1. Package the audio into a file
+        isRecordingRef.current = false;
+
+        if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+        if (audioContextRef.current?.state !== 'closed') audioContextRef.current.close();
+        stream.getTracks().forEach(track => track.stop());
+
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
         const formData = new FormData();
         formData.append("file", audioBlob, "voice.webm");
 
         try {
-          // 2. Send the audio file to Python to be transcribed
           const response = await fetch("http://127.0.0.1:8000/transcribe", {
             method: "POST",
             body: formData,
           });
           const data = await response.json();
-
           if (data.text) {
             setInputText(data.text);
-            sendMessage(data.text); // 3. Auto-send the transcribed text!
-          } else {
-            console.error("Transcription failed:", data.error);
+            sendMessage(data.text);
           }
         } catch (error) {
-          console.error("Error sending audio:", error);
+          console.error("Transcription error:", error);
         } finally {
           setIsLoading(false);
-          // Turn off the red recording light on the browser tab
-          stream.getTracks().forEach(track => track.stop());
         }
       };
 
       mediaRecorder.start();
-      setIsRecording(true);
     } catch (err) {
-      alert("Microphone access denied. Please allow microphone permissions in your browser.");
+      alert("Microphone access denied.");
     }
   };
 
   const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop(); // This triggers the onstop event above
+    if (mediaRecorderRef.current && isRecordingRef.current) {
+      mediaRecorderRef.current.stop();
       setIsRecording(false);
+      isRecordingRef.current = false;
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
     }
   };
 
@@ -111,8 +142,7 @@ function App() {
         content: msg.text
       }));
 
-    const newMessages = [...messages, { sender: "You", text: finalMessage }];
-    setMessages(newMessages);
+    setMessages([...messages, { sender: "You", text: finalMessage }]);
     setInputText("");
     setIsLoading(true);
 
@@ -126,7 +156,7 @@ function App() {
       setMessages((prev) => [...prev, { sender: "Satish", text: data.reply }]);
       speakText(data.reply);
     } catch (error) {
-      setMessages((prev) => [...prev, { sender: "System", text: "Error connecting to Satish's core." }]);
+      setMessages((prev) => [...prev, { sender: "System", text: "Error connecting to Satish." }]);
     } finally {
       setIsLoading(false);
     }
@@ -145,25 +175,40 @@ function App() {
         {messages.length === 0 ? (
           <div className="system-text">Awaiting user input...</div>
         ) : (
-          messages.map((msg, index) => (
-            <div key={index} className={`message-bubble ${msg.sender === 'You' ? 'message-you' : 'message-satish'}`}>
-              <strong>{msg.sender === 'You' ? 'USER' : 'SATISH'}: </strong>
-              <span>{msg.text}</span>
-            </div>
-          ))
+          messages.map((msg, index) => {
+            // NEW: Split the text and image apart so React can render them beautifully
+            const hasImage = msg.text.includes("IMAGE_URL:");
+            const textPart = hasImage ? msg.text.split("IMAGE_URL:")[0] : msg.text;
+            const imageUrl = hasImage ? msg.text.split("IMAGE_URL:")[1] : null;
+
+            return (
+              <div key={index} className={`message-bubble ${msg.sender === 'You' ? 'message-you' : 'message-satish'}`}>
+                <strong>{msg.sender === 'You' ? 'USER' : 'SATISH'}: </strong>
+                <span>{textPart}</span>
+
+                {/* NEW: The Magic Image Renderer */}
+                {imageUrl && (
+                  <img
+                    src={imageUrl}
+                    alt="AI Generated"
+                    style={{ width: '100%', borderRadius: '10px', marginTop: '10px', boxShadow: '0 4px 12px rgba(0,0,0,0.4)' }}
+                  />
+                )}
+              </div>
+            );
+          })
         )}
         {isLoading && <div className="system-text">Satish is processing...</div>}
       </div>
 
       <div className="input-area">
-        {/* The new smart recording button */}
         <button
           className={`btn btn-mic ${isRecording ? 'listening' : ''}`}
           onClick={isRecording ? stopRecording : startRecording}
-          disabled={isLoading && !isRecording}
-          style={{ width: isRecording ? "180px" : "auto", transition: "0.3s" }}
+          disabled={isLoading}
+          style={{ width: isRecording ? "140px" : "auto", transition: "0.3s" }}
         >
-          {isRecording ? "🛑 STOP & SEND" : "🎤"}
+          {isRecording ? "LISTENING..." : "🎤"}
         </button>
 
         <input
